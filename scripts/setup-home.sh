@@ -68,6 +68,11 @@ fi
 echo "[cmux-freestyle] installing cmux-home Ink deps" >&2
 ( cd "$INK_DIR" && bun install --silent )
 
+FREESTYLE_HINT=""
+if [ -n "${FREESTYLE_API_KEY:-}" ]; then
+  FREESTYLE_HINT=$'\nFREESTYLE_API_KEY detected in env. The TUI will also show a\n  \"Freestyle VMs (N)\" panel under the workspaces list, populated directly\n  from your Freestyle account via the Freestyle SDK (no cmux backend\n  required).'
+fi
+
 cat <<EOF
 
 cmux-home is ready at $INK_DIR
@@ -76,5 +81,5 @@ cmux-home is ready at $INK_DIR
 
 The TUI lists every cmux workspace grouped by agent state, surfaces unread
 notifications, and lets you spawn new Codex/Claude workspaces from the
-composer at the bottom.
+composer at the bottom.${FREESTYLE_HINT}
 EOF

@@ -108,7 +108,7 @@ Re-run `./setup.sh` whenever you want a fresh snapshot, for example after a new 
 
 `web` clones `manaflow-ai/cmux` into `~/cmux-freestyle-cmux` by default, writes a `web/.env.local` with the right Freestyle and Cloud VM env, and starts a Docker Postgres unless you pass `--no-postgres`. It only depends on `git`, `bun`, and optionally `docker`. Stack Auth keys are honoured if set in the environment but are optional; the Cloud VM REST routes work without them when called with `X-Cmux-Team-Id`.
 
-`home` installs the `cmux-home` Ink TUI (Node/Bun-only) so anyone with `node` can run a "headquarters" dashboard of their cmux workspaces. Use `--ref feat-ink-rewrite` until the Ink port lands on `main`.
+`home` installs the `cmux-home` Ink TUI (Node/Bun-only) so anyone with `node` can run a "headquarters" dashboard of their cmux workspaces. Use `--ref feat-ink-rewrite` until the Ink port lands on `main`. When `FREESTYLE_API_KEY` is in the env, the TUI also renders a `Freestyle VMs (N)` panel below the workspaces, hitting the Freestyle SDK directly so you can see VM state, snapshot id, and age in the same view as your cmux workspaces.
 
 ## GitHub authentication
 
