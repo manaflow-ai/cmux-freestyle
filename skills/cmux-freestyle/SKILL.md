@@ -1,95 +1,155 @@
 ---
 name: cmux-freestyle
-description: Build, troubleshoot, and ship cmux Cloud VM snapshots on a personal Freestyle account from the manaflow-ai/cmux-freestyle repo. Use when the user wants to mint a FREESTYLE_SANDBOX_SNAPSHOT, run ./setup.sh (snapshot|doctor|web|home), bump pinned cmuxd-remote or agent CLI versions, recover from GitHub API rate limits during a snapshot build, wire the snapshot id into a self-hosted cmux backend, or boot an ad-hoc VM from the resulting snapshot.
+description: Drive cmux + Freestyle Cloud VMs end to end from the manaflow-ai/cmux-freestyle repo. Use when the user wants to boot a Freestyle VM from a snapshot, fork an existing VM to clone its running state, open a cmux workspace already SSH'd into a VM with a dev-server LocalForward, lay out codex on the left and a browser on the right pointed at the VM's localhost dev server, or set up a self-serve cmux + Freestyle workflow.
 ---
 
 # cmux-freestyle
 
-This repo is the self-serve recipe for the cmux Cloud VM image. `./setup.sh` builds a Freestyle VM snapshot containing `cmuxd-remote`, baked agent CLIs (Claude Code, Codex, OpenCode, Pi), Node, Bun, and the Python/OpenSSL shim the cmux browser proxy needs. The output is `FREESTYLE_SANDBOX_SNAPSHOT=sh-...`, which is the integration handoff for a self-hosted cmux backend or any Freestyle SDK consumer.
+cmux-freestyle gives you everything you need to spin a fresh Freestyle Cloud VM and drive it from a cmux workspace as if it were local. The end state every flow targets:
 
-Snapshots are scoped to the Freestyle account that built them. A snapshot id from another account, including manaflow's, will not resolve. Every consumer runs `./setup.sh` once against their own `FREESTYLE_API_KEY`.
+- A cmux workspace SSH'd into a Freestyle VM, with an `ssh -L` LocalForward so the Mac browser can hit a dev server on the VM at `127.0.0.1:<localPort>`.
+- Left pane: terminal on the VM (where you run `codex`, `claude`, or anything else).
+- Right pane: cmux browser navigated to `http://127.0.0.1:<localPort>` so you see the dev server live as the agent edits.
+- Optional: fork the running VM in place. Forks are memory + disk clones; the dev server keeps running on the fork. Open the fork in its own cmux workspace and the two run side by side.
 
-## Dispatcher
-
-```bash
-./setup.sh                                # default: snapshot
-./setup.sh snapshot [flags]               # build + publish a Freestyle snapshot
-./setup.sh doctor                         # diagnose tooling, env, Freestyle API, GitHub release
-./setup.sh web --snapshot sh-...          # clone manaflow-ai/cmux and wire its Next.js dev env
-./setup.sh home --ref feat-ink-rewrite    # install + run the cmux-home Ink TUI
-./setup.sh skills [install|...]           # install the cmux-freestyle agent skill into a project
-```
-
-`./setup.sh` auto-loads `.env` (skip with `CMUX_FREESTYLE_SKIP_DOTENV=1`). The dispatcher requires Bun or Node 20+ for `snapshot` only; `doctor`, `home`, `skills` are pure bash.
+The `./setup.sh vm` subcommand does all of this in one call.
 
 ## Env contract
 
-Required:
+- `FREESTYLE_API_KEY` is required. Either `export FREESTYLE_API_KEY=fk_...` or put it in `cmux-freestyle/.env` (the dispatcher auto-loads `.env`).
+- A Freestyle snapshot id (for `vm boot`). Build one with `./setup.sh snapshot` or use any existing snapshot id from `./setup.sh vm list`.
 
-- `FREESTYLE_API_KEY` (snapshot, web). Get one at https://dash.freestyle.sh.
-
-Optional:
-
-- `GITHUB_TOKEN` or `GH_TOKEN` raises the 60 req/hr unauthenticated GitHub API limit. The build forwards it to both the release API and the asset download.
-- `CMUX_FREESTYLE_SNAPSHOT_NAME` snapshot name. Default `cmux-freestyle-<timestamp>`.
-- `CMUX_RELEASE_TAG` pin a specific `manaflow-ai/cmux` release tag (e.g. `v0.9.42`). Default: latest stable release.
-- `CMUX_CLOUD_IMAGE_NODE_MAJOR` NodeSource major line. Default `22`.
-- `CMUX_CLOUD_IMAGE_BUN_VERSION` exact `oven-sh/bun` release.
-- `CMUX_CLOUD_IMAGE_CLAUDE_CODE_NPM_SPEC` exact semver, or `none` to skip.
-- `CMUX_CLOUD_IMAGE_CODEX_NPM_SPEC` exact semver, or `none` to skip.
-- `CMUX_CLOUD_IMAGE_OPENCODE_NPM_SPEC` exact semver, or `none` to skip.
-- `CMUX_CLOUD_IMAGE_PI_NPM_SPEC` exact semver, or `none` to skip.
-- `CMUX_FREESTYLE_SKIP_CACHE=1` forces a full Freestyle rebuild.
-- `CMUX_FREESTYLE_JSON=1` (or `--json`) machine-readable output.
-
-Every env var has a matching `--flag` on `./setup.sh snapshot`. See `README.md` for the table.
-
-## Pin policy
-
-Agent CLI specs are exact semver (e.g. `@openai/codex@0.130.0`). Ranges (`^1.2`, `~1.2`) and `latest` are rejected so every rebuild is reproducible. Use `none` to omit a CLI entirely. When bumping a pinned spec, change the env var or pass a flag and re-run `./setup.sh`; do not loosen the spec.
-
-## Snapshot lifecycle
-
-- Each successful build mints a new snapshot id. Old ones persist until deleted in the Freestyle dashboard or via the Freestyle API.
-- Builds take roughly 5 to 15 minutes depending on Freestyle's cache hit rate.
-- The image runs smoke checks during build: `openssl version -a`, `python3 -c 'import ssl'`, `node --version`, `bun --version`, `cmux --help`, `cmuxd-remote version`, plus `--version` for every baked agent CLI. A failure surfaces in the build log.
-- `cmuxd-remote` is downloaded from the pinned `manaflow-ai/cmux` release and SHA-256 verified against `cmuxd-remote-checksums.txt` during the build.
-
-## Plumbing into a self-hosted cmux backend
-
-After a snapshot build, set in your cmux web `.env.local`:
+## Subcommands
 
 ```bash
-FREESTYLE_API_KEY=fk_...
-FREESTYLE_SANDBOX_SNAPSHOT=sh-xxxxxxxxxxxxxxxxxxxx
-CMUX_VM_DEFAULT_PROVIDER=freestyle
-CMUX_VM_FREESTYLE_ENABLED=1
+./setup.sh vm boot   <snapshotId> [--local-port n] [--vm-port n] [--name n]
+./setup.sh vm fork   <vmId>        [--local-port n] [--vm-port n] [--name n]
+./setup.sh vm open   <vmId>        [--local-port n] [--vm-port n] [--name n]
+./setup.sh vm ssh    <vmId>        [--json] [--local-port n] [--vm-port n]
+./setup.sh vm list   [--json]
+./setup.sh vm delete <vmId>
 ```
 
-`./setup.sh web --snapshot sh-...` writes this for you when wiring up a fresh `manaflow-ai/cmux` checkout (default location `~/cmux-freestyle-cmux`), and starts a Docker Postgres unless you pass `--no-postgres`. Stack Auth keys are honoured if set but optional; the Cloud VM REST routes accept `X-Cmux-Team-Id` without auth.
+Flags:
 
-## Ad-hoc VM boot
+- `--local-port` Mac-side port that the SSH LocalForward binds. Default `17430`. Use a different port for each concurrent workspace so forks don't collide.
+- `--vm-port` VM-side dev server port. Default `3000`.
+- `--name` Workspace title in the cmux sidebar. Default `freestyle-<vmId prefix>`.
+- `--no-open` (boot/fork only) skip cmux ssh, print creds only.
+- `--json` (ssh/list) machine-readable output for scripting.
+
+## Workflow A: boot a fresh VM and start a dev session
 
 ```bash
-npx -y freestyle vm create --snapshot sh-xxxxxxxxxxxxxxxxxxxx --ssh
+./setup.sh vm boot sh-17agfasevrc18c8f15nn --local-port 17430
 ```
 
-Lands you in a Cloud VM shell with `cmuxd-remote`, `claude`, `codex`, `opencode`, `pi`, `bun`, and `node` already on PATH.
+This:
 
-## Recovery playbook
+1. Calls `vms.create({ snapshot: { snapshotId } })` to boot the VM.
+2. Polls until the VM reaches `running`.
+3. Mints an ephemeral SSH identity + token (`identities.create()` -> `permissions.vms.grant({vmId})` -> `tokens.create()`).
+4. Runs `cmux ssh <vmId>:<token>@vm-ssh.freestyle.sh --port 22 --no-focus --ssh-option 'LocalForward=<localPort> localhost:<vmPort>' ...` to open the workspace without stealing focus.
+5. Adds a browser pane to the right pointed at `http://127.0.0.1:<localPort>/`.
+6. Prints the resolved JSON: `vmId`, `workspaceRef`, ssh dest, identity/token ids, browser URL.
 
-- GitHub 403/429 on release lookup: set `GITHUB_TOKEN` or `GH_TOKEN`. The build script tells you when the rate limit was the cause.
-- Build cache misbehaves or you want a clean run: `./setup.sh snapshot --skip-cache` or `CMUX_FREESTYLE_SKIP_CACHE=1`.
-- `bun` or `node` missing: `./setup.sh doctor` reports it. Install bun: `curl -fsSL https://bun.sh/install | bash`. Install node 20+ from nodejs.org or the platform package manager.
-- Need machine-readable output for CI: `--json` or `CMUX_FREESTYLE_JSON=1`.
-- API key invalid or revoked: `./setup.sh doctor` returns FAIL with HTTP 401/403 from the Freestyle snapshots endpoint.
-- Snapshot id from someone else not working: it cannot work. Run `./setup.sh` against your own `FREESTYLE_API_KEY`.
+Once you have the workspace, start your dev server on the VM and the right pane shows it live. Smallest possible smoke test (run in the terminal on the VM, i.e., the left pane):
 
-## Rules
+```bash
+echo "<h1>cmux-freestyle demo</h1>" > /tmp/index.html
+cd /tmp && nohup python3 -m http.server 3000 --bind 127.0.0.1 > /tmp/srv.log 2>&1 & disown
+```
 
-- Never loosen agent CLI specs to ranges or `latest`. The build rejects them.
-- Never share or hard-code another account's snapshot id; it will not resolve.
-- The Freestyle SDK only needs `FREESTYLE_API_KEY`. It never touches GitHub.
-- Rebuild after every new `manaflow-ai/cmux` release if you want the new `cmuxd-remote`. Re-run `./setup.sh`.
-- For a self-hosted cmux backend, set both `FREESTYLE_API_KEY` and `FREESTYLE_SANDBOX_SNAPSHOT`, plus `CMUX_VM_DEFAULT_PROVIDER=freestyle` and `CMUX_VM_FREESTYLE_ENABLED=1`.
-- Prefer `./setup.sh doctor` before reaching for ad-hoc curl debugging. It already covers tooling, env, Freestyle reachability, and GitHub release resolution.
+Then reload the browser pane in cmux and you see the page.
+
+For a real dev session, run `codex` (or `claude`) in the left pane. The Freestyle snapshot already ships with `codex`, `claude`, `opencode`, `pi`, `bun`, and `node` on PATH. Each tool reads its credentials from the env. The easiest way to inject `OPENAI_API_KEY` without echoing it on screen is a single line through the existing SSH path:
+
+```bash
+printf 'export OPENAI_API_KEY=%q\n' "$OPENAI_API_KEY" | \
+  ssh -p 22 <vmId>:<token>@vm-ssh.freestyle.sh \
+    'cat > /root/.codex.env && chmod 600 /root/.codex.env'
+```
+
+Then in the left pane: `source /root/.codex.env && codex`.
+
+## Workflow B: fork a running VM for parallel experimentation
+
+```bash
+./setup.sh vm fork <vmId> --local-port 17431
+```
+
+This:
+
+1. Calls `vms.ref({vmId}).fork({})` (REST `POST /v1/vms/{vm_id}/fork`).
+2. Picks the first fork from `result.forks` and polls until `running`.
+3. Mints fresh SSH credentials for the fork (forks do not inherit identities/tokens).
+4. Opens the fork in its own cmux workspace with the same layout. Use a **different** `--local-port` so the new workspace's LocalForward does not collide with the original.
+
+Forks clone the source VM's memory and disk state at fork time. If the source had a dev server running, the fork already has it running too (same PID, same listening socket). The static content even reflects the source's hostname because env captures happened at fork time. This is the cool demo: a freeze-frame branch of your dev session.
+
+The CLI does not surface fork directly (`freestyle vm --help` lists boot/list/ssh/exec/delete/build/snapshot but no fork). It only exists in the SDK and the REST API. `./setup.sh vm fork` is the wrapper.
+
+## Workflow C: re-open an existing VM in a new workspace
+
+If a workspace got closed or you want a second view onto the same VM:
+
+```bash
+./setup.sh vm open <vmId> --local-port 17432
+```
+
+Same flow as `boot`/`fork` minus the boot/fork step: mint creds, cmux ssh, add browser pane. Each `open` mints a fresh identity + token, so the old token in the closed workspace is now orphaned. Either revoke it through the Freestyle dashboard or accept the leak.
+
+## SSH wire format
+
+`./setup.sh vm ssh <vmId>` returns the raw building blocks if you want to wire cmux ssh by hand:
+
+```text
+ssh <vmId>:<token>@vm-ssh.freestyle.sh -p 22
+```
+
+cmux ssh accepts that destination verbatim:
+
+```bash
+cmux ssh '<vmId>:<token>@vm-ssh.freestyle.sh' \
+  --port 22 \
+  --name "freestyle-${VM_ID:0:6}" \
+  --ssh-option StrictHostKeyChecking=accept-new \
+  --ssh-option UserKnownHostsFile=/dev/null \
+  --ssh-option 'LocalForward=17430 localhost:3000' \
+  --no-focus
+```
+
+The LocalForward value must be quoted as one shell word (`'LocalForward=17430 localhost:3000'`), otherwise the space splits it into `--ssh-option LocalForward=17430` plus a stray `localhost:3000` positional.
+
+## Workflow D: codex on left, browser on right (the full layout)
+
+This is the demo flow the helper produces on every `boot|fork|open`:
+
+1. `./setup.sh vm boot <snapshotId>` mints the workspace and the right-side browser pane.
+2. In the left pane (already on the VM): start the dev server (`bun run dev`, `next dev`, `python3 -m http.server`, whatever).
+3. In the left pane: run `codex` (or `claude` / `opencode` / `pi`).
+4. The browser on the right shows your dev server. Reload as the agent edits files in the VM workspace; the change is visible immediately because both the dev server and the agent share the VM filesystem.
+
+For a longer-running session, fork the VM (`./setup.sh vm fork <vmId> --local-port <free port>`) at the moment you want a branch and continue the agent in the fork while you keep the original on the side.
+
+## Cleanup
+
+Freestyle VMs accrue cost. When you are done:
+
+```bash
+./setup.sh vm list                  # see what's running
+./setup.sh vm delete <vmId>         # one at a time; the workspace stays
+                                    # in cmux but its SSH session drops
+```
+
+`./setup.sh vm delete` calls `vms.delete({vmId})`. The SSH identity + token minted by `open|boot|fork` are not auto-revoked; they become useless when the VM is deleted but the records linger. Delete them via the Freestyle dashboard (`Identities` and `Tokens`) when you want a clean slate.
+
+## Rules and gotchas
+
+- Always pass `--no-focus` to `cmux ssh` (the helper does this for you). The user may be visually focused on another workspace.
+- Pick a unique `--local-port` per concurrent workspace. The dev server inside each VM is on `:3000`, but the Mac-side forwarded ports must not collide.
+- Freestyle snapshots are scoped to the building Freestyle account. A snapshot id from another account, including manaflow's, will not boot.
+- Fork is SDK / REST only. `freestyle vm fork` does not exist in the CLI. The helper wraps `vm.fork()` (`POST /v1/vms/{vm_id}/fork`).
+- The boot smoke checks already verify `cmuxd-remote`, `node`, `bun`, `codex`, `claude`, `opencode`, `pi`, `python3`, `openssl`; if your dev server fails to start, suspect your code, not the image.
+- The dispatcher auto-loads `cmux-freestyle/.env`. Skip with `CMUX_FREESTYLE_SKIP_DOTENV=1`.
+- For port forwarding to fail loudly instead of silently, the helper passes `ExitOnForwardFailure=yes` to ssh. If the cmux pane disconnects right after `cmux ssh`, suspect a clashing `--local-port`.

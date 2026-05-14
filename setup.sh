@@ -23,11 +23,11 @@ fi
 PEEK_SUB="snapshot"
 if [ $# -gt 0 ]; then
   case "$1" in
-    snapshot|home|web|doctor|skills) PEEK_SUB="$1" ;;
+    snapshot|home|web|doctor|skills|vm) PEEK_SUB="$1" ;;
   esac
 fi
 
-if [ "$PEEK_SUB" = "snapshot" ] || [ "$PEEK_SUB" = "web" ]; then
+if [ "$PEEK_SUB" = "snapshot" ] || [ "$PEEK_SUB" = "web" ] || [ "$PEEK_SUB" = "vm" ]; then
   if [ -z "${FREESTYLE_API_KEY:-}" ]; then
     echo "error: FREESTYLE_API_KEY is required for '$PEEK_SUB'." >&2
     echo "  Get one from https://dash.freestyle.sh and either:" >&2
@@ -38,7 +38,7 @@ if [ "$PEEK_SUB" = "snapshot" ] || [ "$PEEK_SUB" = "web" ]; then
 fi
 
 RUNNER=""
-if [ "$PEEK_SUB" = "snapshot" ]; then
+if [ "$PEEK_SUB" = "snapshot" ] || [ "$PEEK_SUB" = "vm" ]; then
   if command -v bun >/dev/null 2>&1; then
     RUNNER="bun"
   elif command -v node >/dev/null 2>&1; then
@@ -76,7 +76,7 @@ fi
 SUBCOMMAND="snapshot"
 if [ $# -gt 0 ]; then
   case "$1" in
-    snapshot|home|web|doctor|skills) SUBCOMMAND="$1"; shift ;;
+    snapshot|home|web|doctor|skills|vm) SUBCOMMAND="$1"; shift ;;
   esac
 fi
 
@@ -86,6 +86,13 @@ case "$SUBCOMMAND" in
       exec bun run scripts/build-snapshot.ts "$@"
     else
       exec npx --no-install tsx scripts/build-snapshot.ts "$@"
+    fi
+    ;;
+  vm)
+    if [ "$RUNNER" = "bun" ]; then
+      exec bun run scripts/vm.ts "$@"
+    else
+      exec npx --no-install tsx scripts/vm.ts "$@"
     fi
     ;;
   home)
