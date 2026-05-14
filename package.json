@@ -1,0 +1,22 @@
+{
+  "name": "cmux-freestyle",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build the cmux Cloud VM Freestyle snapshot from a published cmuxd-remote release.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build-snapshot": "tsx scripts/build-snapshot.ts"
+  },
+  "dependencies": {
+    "freestyle": "0.1.51"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
