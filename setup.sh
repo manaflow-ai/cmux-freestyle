@@ -23,7 +23,7 @@ fi
 PEEK_SUB="snapshot"
 if [ $# -gt 0 ]; then
   case "$1" in
-    snapshot|home|web|doctor) PEEK_SUB="$1" ;;
+    snapshot|home|web|doctor|skills) PEEK_SUB="$1" ;;
   esac
 fi
 
@@ -76,7 +76,7 @@ fi
 SUBCOMMAND="snapshot"
 if [ $# -gt 0 ]; then
   case "$1" in
-    snapshot|home|web|doctor) SUBCOMMAND="$1"; shift ;;
+    snapshot|home|web|doctor|skills) SUBCOMMAND="$1"; shift ;;
   esac
 fi
 
@@ -96,6 +96,9 @@ case "$SUBCOMMAND" in
     ;;
   doctor)
     exec "$SCRIPT_DIR/scripts/doctor.sh" "$@"
+    ;;
+  skills)
+    exec "$SCRIPT_DIR/skills.sh" "$@"
     ;;
   *)
     echo "unknown subcommand: $SUBCOMMAND" >&2

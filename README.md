@@ -104,11 +104,14 @@ Re-run `./setup.sh` whenever you want a fresh snapshot, for example after a new 
 ./setup.sh doctor                         # diagnose tooling, env, Freestyle API, GitHub release
 ./setup.sh web --snapshot sh-xxxxxxxxxx   # clone manaflow-ai/cmux and wire its Next.js dev env to your snapshot
 ./setup.sh home --ref feat-ink-rewrite    # install + run cmux-home, the Ink/TypeScript TUI dashboard
+./setup.sh skills                         # install the cmux-freestyle agent skill into the current project
 ```
 
 `web` clones `manaflow-ai/cmux` into `~/cmux-freestyle-cmux` by default, writes a `web/.env.local` with the right Freestyle and Cloud VM env, and starts a Docker Postgres unless you pass `--no-postgres`. It only depends on `git`, `bun`, and optionally `docker`. Stack Auth keys are honoured if set in the environment but are optional; the Cloud VM REST routes work without them when called with `X-Cmux-Team-Id`.
 
 `home` installs the `cmux-home` Ink TUI (Node/Bun-only) so anyone with `node` can run a "headquarters" dashboard of their cmux workspaces. Use `--ref feat-ink-rewrite` until the Ink port lands on `main`. When `FREESTYLE_API_KEY` is in the env, the TUI also renders a `Freestyle VMs (N)` panel below the workspaces, hitting the Freestyle SDK directly so you can see VM state, snapshot id, and age in the same view as your cmux workspaces.
+
+`skills` installs the `cmux-freestyle` agent skill from `skills/cmux-freestyle/SKILL.md` into the target project's `.agents/skills/cmux-freestyle/` and `.claude/skills/cmux-freestyle/`, following the cross-agent convention shared by Claude Code, Codex, OpenCode, Amp, Goose, and Gemini CLI. After install, an agent in that project knows how to operate `./setup.sh`, the env contract, the exact-semver pin policy, GitHub rate-limit recovery, and how to plumb a snapshot id into a self-hosted cmux backend. Default mode is `--link` (symlink to this checkout, so `git pull` auto-upgrades). Pass `--copy` if you want to delete the cmux-freestyle clone later. Pass `--target <dir>` to install into a different project, `--check` for a dry run, `uninstall` to remove, `doctor` to inspect install state, and `list` to enumerate installable skills. `./skills.sh` works on its own too.
 
 ## GitHub authentication
 
