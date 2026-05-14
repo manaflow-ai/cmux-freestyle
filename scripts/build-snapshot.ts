@@ -276,16 +276,26 @@ async function resolveDaemonRelease(tag: string | null): Promise<DaemonRelease> 
 }
 
 async function fetchLatestStableTag(): Promise<string> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "cmux-freestyle-setup",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const token = githubToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(
     `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`,
-    {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "cmux-freestyle-setup",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    },
+    { headers },
   );
+  if (response.status === 403 || response.status === 429) {
+    const reset = response.headers.get("x-ratelimit-reset");
+    const hint = token
+      ? "Your GITHUB_TOKEN does not have access; check repo visibility."
+      : "Set GITHUB_TOKEN (or GH_TOKEN) to lift the unauthenticated 60/hr GitHub API rate limit.";
+    throw new Error(
+      `GitHub API rate limited (HTTP ${response.status}${reset ? `, reset at ${new Date(Number(reset) * 1000).toISOString()}` : ""}). ${hint}`,
+    );
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new Error(
@@ -300,14 +310,24 @@ async function fetchLatestStableTag(): Promise<string> {
   return tag;
 }
 
+function githubToken(): string | null {
+  const candidates = [process.env.GITHUB_TOKEN, process.env.GH_TOKEN];
+  for (const value of candidates) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
 async function fetchSha256FromChecksums(
   checksumsURL: string,
   assetName: string,
   releaseTag: string,
 ): Promise<string> {
-  const response = await fetch(checksumsURL, {
-    headers: { "User-Agent": "cmux-freestyle-setup" },
-  });
+  const headers: Record<string, string> = { "User-Agent": "cmux-freestyle-setup" };
+  const token = githubToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(checksumsURL, { headers });
   if (!response.ok) {
     throw new Error(
       `Could not fetch ${CHECKSUMS_ASSET_NAME} for ${releaseTag} from ${checksumsURL}: HTTP ${response.status}. ` +

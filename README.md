@@ -95,6 +95,27 @@ You will land in a cmux Cloud VM shell with `cmuxd-remote`, `claude`, `codex`, `
 
 Re-run `./setup.sh` whenever you want a fresh snapshot, for example after a new `manaflow-ai/cmux` release or after bumping pinned agent CLI versions. Each run produces a new snapshot id under your Freestyle account; old ones stay around until you delete them through the Freestyle dashboard or API.
 
+## Subcommands
+
+`./setup.sh` is a dispatcher. When called with no subcommand it builds the snapshot. The other subcommands cover the rest of a self-host:
+
+```bash
+./setup.sh                                # default: build snapshot (same as `./setup.sh snapshot`)
+./setup.sh doctor                         # diagnose tooling, env, Freestyle API, GitHub release
+./setup.sh web --snapshot sh-xxxxxxxxxx   # clone manaflow-ai/cmux and wire its Next.js dev env to your snapshot
+./setup.sh home --ref feat-ink-rewrite    # install + run cmux-home, the Ink/TypeScript TUI dashboard
+```
+
+`web` clones `manaflow-ai/cmux` into `~/cmux-freestyle-cmux` by default, writes a `web/.env.local` with the right Freestyle and Cloud VM env, and starts a Docker Postgres unless you pass `--no-postgres`. It only depends on `git`, `bun`, and optionally `docker`. Stack Auth keys are honoured if set in the environment but are optional; the Cloud VM REST routes work without them when called with `X-Cmux-Team-Id`.
+
+`home` installs the `cmux-home` Ink TUI (Node/Bun-only) so anyone with `node` can run a "headquarters" dashboard of their cmux workspaces. Use `--ref feat-ink-rewrite` until the Ink port lands on `main`.
+
+## GitHub authentication
+
+Snapshot builds resolve the cmuxd-remote release through public endpoints (`/repos/.../releases/latest` and `cmuxd-remote-checksums.txt`). The unauthenticated GitHub API allows 60 requests per hour, which is fine in normal use. If you hit a 403/429 (shared IP, CI loops), set `GITHUB_TOKEN` or `GH_TOKEN`. The build script forwards it on both the API and asset fetches and tells you when the limit was the cause.
+
+The Freestyle SDK never touches GitHub; it only needs `FREESTYLE_API_KEY`.
+
 ## License
 
 MIT, see `LICENSE`.
