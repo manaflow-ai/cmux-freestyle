@@ -400,7 +400,9 @@ function freestyleBaseDockerfileContent(opts: {
       `&& printf '%s  /usr/local/bin/cmuxd-remote\\n' ${shellQuote(opts.daemonSha256)} | sha256sum -c - ` +
       "&& chmod 0755 /usr/local/bin/cmuxd-remote",
     ...toolInstallCommands(opts.nodeMajor, opts.bunVersion, opts.tools).map((cmd) => `RUN ${cmd}`),
+    ...preInstallTailscaleCommands().map((cmd) => `RUN ${cmd}`),
     ...rootSetupCommands().map((cmd) => `RUN ${cmd}`),
+    ...preCloneCmuxRepoCommands().map((cmd) => `RUN ${cmd}`),
     ...imageSmokeTestCommands(opts.tools).map((cmd) => `RUN ${cmd}`),
     "RUN mkdir -p /etc/systemd/system/multi-user.target.wants",
     "RUN cat <<'EOF' >/etc/systemd/system/cmuxd-ws.service\n" +
@@ -477,6 +479,36 @@ function bunInstallCommand(bunVersion: string): string {
     "rm -rf /tmp/cmux-bun-install",
   ];
   return `{ ${commands.join(" && ")}; } >/tmp/cmux-bun-install.txt 2>&1`;
+}
+
+function preInstallTailscaleCommands(): ReadonlyArray<string> {
+  // Install Tailscale at snapshot-build time so the runtime cold path
+  // doesn't pay the ~7-9s static-tarball download/install. Uses Tailscale's
+  // official Debian/Ubuntu apt repo (Noble). The freestyle-vm-ssh helper's
+  // bootstrap will skip its install branch when `command -v tailscale`
+  // already finds it.
+  return [
+    "install -d -m 0755 /usr/share/keyrings",
+    "curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null",
+    "curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list >/dev/null",
+    "apt-get update -qq",
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tailscale",
+    "rm -rf /var/lib/apt/lists/*",
+  ];
+}
+
+function preCloneCmuxRepoCommands(): ReadonlyArray<string> {
+  // Pre-clone manaflow-ai/cmux into /home/cmux/cmux + run `bun install` in
+  // web/ at snapshot-build time so the runtime cold path (first `cmux-home
+  // enter` against a fresh VM) doesn't pay the clone + install cost. The
+  // `freestyle-vm-ssh` helper does `git pull --ff-only` per attach, so
+  // checkouts stay up to date.
+  return [
+    "install -d -o cmux -g cmux /home/cmux/cmux",
+    "su -l cmux -c 'git clone --depth 50 https://github.com/manaflow-ai/cmux.git /home/cmux/cmux'",
+    "su -l cmux -c 'cd /home/cmux/cmux/web && bun install >/tmp/cmux-prebuild-bun-install.log 2>&1'",
+    "chown -R cmux:cmux /home/cmux/cmux",
+  ];
 }
 
 function rootSetupCommands(): ReadonlyArray<string> {

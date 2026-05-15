@@ -5,14 +5,39 @@ description: Drive cmux + Freestyle Cloud VMs end to end from the manaflow-ai/cm
 
 # cmux-freestyle
 
-cmux-freestyle gives you everything you need to spin a fresh Freestyle Cloud VM and drive it from a cmux workspace as if it were local. The end state every flow targets:
+cmux-freestyle gives you everything you need to spin a fresh Freestyle Cloud VM and drive it from a cmux workspace as if it were local.
 
-- A cmux workspace SSH'd into a Freestyle VM, with an `ssh -L` LocalForward so the Mac browser can hit a dev server on the VM at `127.0.0.1:<localPort>`.
-- Left pane: terminal on the VM (where you run `codex`, `claude`, or anything else).
-- Right pane: cmux browser navigated to `http://127.0.0.1:<localPort>` so you see the dev server live as the agent edits.
-- Optional: fork the running VM in place. Forks are memory + disk clones; the dev server keeps running on the fork. Open the fork in its own cmux workspace and the two run side by side.
+## "Start a new workspace" — the default
 
-The `./setup.sh vm` subcommand does all of this in one call.
+When the user says **"start a new workspace"**, "spin up a new VM", "set up a fresh workspace", or anything in that family, the helper produces this exact 2x2 cmux workspace:
+
+- **top-left:** `codex` already running on the VM, ready for input
+- **bottom-left:** empty terminal on the VM, ready for ad-hoc commands
+- **bottom-right:** runs `git clone --depth 1 https://github.com/manaflow-ai/cmux && cd cmux && bun install && bun dev` on a fresh ssh session
+- **top-right:** cmux browser that auto-navigates to `http://127.0.0.1:<localPort>/` (forwarded to the VM's `:3000`) once the dev server responds
+
+The single entrypoint is:
+
+```bash
+./setup.sh secrets check     # always pre-flight
+./setup.sh vm new            # uses $FREESTYLE_SANDBOX_SNAPSHOT by default
+```
+
+`vm new` boots a fresh VM from the configured snapshot, mints three independent SSH identities (one per long-lived pane to keep them independent), opens the cmux workspace with the LocalForward, waits for the dev URL, then reloads the browser. To override:
+
+```bash
+./setup.sh vm new <snapshotId|vmId> \
+  [--local-port 17430]   # Mac-side forwarded port; bump per concurrent workspace
+  [--vm-port 3000]       # dev server port inside the VM
+  [--name myws]          # workspace title in the cmux sidebar
+  [--dev-cmd "..."]      # override the cmux clone+install+dev preset
+  [--skip-dev]           # leave bottom-right empty, no dev server
+  [--skip-codex]         # leave top-left empty, don't launch codex
+```
+
+Pass a vmId instead of a snapshotId to attach this layout to an already-running VM instead of booting fresh.
+
+Underlying primitives (`vm boot|fork|open|dev|ssh|list|delete`) are documented below and still available when you want a non-default layout.
 
 ## Credentials (always probe setup.sh first)
 
@@ -38,9 +63,13 @@ A Freestyle snapshot id is also needed for `vm boot`. Build one with `./setup.sh
 ## Subcommands
 
 ```bash
-./setup.sh vm boot   <snapshotId> [--local-port n] [--vm-port n] [--name n]
+./setup.sh vm new    [snapshot|vm] [--local-port n] [--vm-port n] [--name n]
+                                   [--dev-cmd "..."] [--skip-dev] [--skip-codex]
+./setup.sh vm boot   <snapshotId>  [--local-port n] [--vm-port n] [--name n]
 ./setup.sh vm fork   <vmId>        [--local-port n] [--vm-port n] [--name n]
 ./setup.sh vm open   <vmId>        [--local-port n] [--vm-port n] [--name n]
+./setup.sh vm dev    <snapshot|vm> [--local-port n] [--vm-port n] [--name n]
+                                   [--dev-cmd "..."] [--skip-dev] [--skip-codex]
 ./setup.sh vm ssh    <vmId>        [--json] [--local-port n] [--vm-port n]
 ./setup.sh vm list   [--json]
 ./setup.sh vm delete <vmId>
@@ -50,11 +79,15 @@ Flags:
 
 - `--local-port` Mac-side port that the SSH LocalForward binds. Default `17430`. Use a different port for each concurrent workspace so forks don't collide.
 - `--vm-port` VM-side dev server port. Default `3000`.
-- `--name` Workspace title in the cmux sidebar. Default `freestyle-<vmId prefix>`.
+- `--name` Workspace title in the cmux sidebar. Default `freestyle-<vmId prefix>` for boot/fork/open, `codex-<vmId prefix>` for new/dev.
+- `--dev-cmd` (new/dev) override the command run in bottom-right. Default for `vm new` is the cmux clone+install+dev preset; default for `vm dev` is a python http.server smoke test.
+- `--skip-dev` / `--skip-codex` (new/dev) leave the matching pane empty.
 - `--no-open` (boot/fork only) skip cmux ssh, print creds only.
 - `--json` (ssh/list) machine-readable output for scripting.
 
-## Workflow A: boot a fresh VM and start a dev session
+## Workflow A: boot a fresh VM with a minimal 2-pane layout
+
+Use this only when the user explicitly wants the simple 2-pane layout (terminal + browser) without the cmux clone preset. For the default "start a new workspace" flow, use `vm new` (see top of this document).
 
 ```bash
 ./setup.sh secrets check                              # pre-flight
@@ -130,11 +163,14 @@ cmux ssh accepts that destination verbatim:
 cmux ssh '<vmId>:<token>@vm-ssh.freestyle.sh' \
   --port 22 \
   --name "freestyle-${VM_ID:0:6}" \
+  --no-daemon-bootstrap \
   --ssh-option StrictHostKeyChecking=accept-new \
   --ssh-option UserKnownHostsFile=/dev/null \
   --ssh-option 'LocalForward=17430 localhost:3000' \
   --no-focus
 ```
+
+`--no-daemon-bootstrap` is required for Freestyle: the vm-ssh gateway rejects scp on the exec channel, and without this flag cmux ssh stalls trying to upload `cmuxd-remote` and ends up in a reconnect loop (`exec request failed on channel 0`).
 
 The LocalForward value must be quoted as one shell word (`'LocalForward=17430 localhost:3000'`), otherwise the space splits it into `--ssh-option LocalForward=17430` plus a stray `localhost:3000` positional.
 
@@ -164,8 +200,11 @@ Freestyle VMs accrue cost. When you are done:
 ## Rules and gotchas
 
 - Always pre-flight with `./setup.sh secrets check`. Never prompt the user for a Freestyle API key in chat, never paste one yourself, never `export` one in commands you suggest. Hand off credential setup to `./setup.sh secrets set` and resume.
+- **Always run `cmux ssh` yourself; never just print it for the user to copy-paste.** When the user says "give me the cmux ssh command", "open it", "run it", or anything in that family, you mint fresh creds (`./setup.sh vm boot|fork|open` or `vm ssh`) and execute `cmux ssh` from this repo's shell. Show the command in chat for reference, but the same turn must include the actual invocation. The user almost always wants the workspace opened, not a snippet to run by hand.
+- **`cmux ssh` into Freestyle VMs requires `--no-daemon-bootstrap`.** `vm-ssh.freestyle.sh` is a forwarding-only SSH gateway; the default cmux ssh path tries to scp `cmuxd-remote` onto the host over the exec channel, the gateway rejects that, ssh exits 255 with `exec request failed on channel 0`, and cmux loops "reconnecting (attempt N/20)". The wrappers in `scripts/vm.ts` (`vm boot|fork|open|ssh|dev|new`) pass this flag for you. If you hand-roll a `cmux ssh` command for a Freestyle VM, you must add `--no-daemon-bootstrap` (this disables cmuxd-remote shell features, which the Freestyle image provides preinstalled anyway). Mint fresh creds and a unique local port for each new pane; do not reuse a token whose `cmux ssh` is still alive in another workspace.
+- **`cmux ssh` into Freestyle VMs also requires `ControlMaster=no` and `ControlPath=none`.** Without these, cmux ssh defaults to `ControlMaster=auto` with a `/tmp/cmux-ssh-<uid>-%C` socket. On its own auto-reconnect, the new ssh child cannot bind the LocalForward port because the previous master is still holding it, so `ExitOnForwardFailure=yes` tears the reconnect down and the pane spams `mux_client_request_session: read from master failed: Broken pipe` and `bind [127.0.0.1]:<port>: Address already in use`. Symptoms look snapshot-specific (a heavier shell init can trigger the first disconnect that kicks off the loop), but the root cause is mux sharing, not the snapshot. The `scripts/vm.ts` wrappers pass these for you; hand-rolled `cmux ssh` commands must add `--ssh-option ControlMaster=no --ssh-option ControlPath=none`.
 - Always pass `--no-focus` to `cmux ssh` (the helper does this for you). The user may be visually focused on another workspace.
-- Pick a unique `--local-port` per concurrent workspace. The dev server inside each VM is on `:3000`, but the Mac-side forwarded ports must not collide.
+- Pick a unique `--local-port` per concurrent workspace. The dev server inside each VM is on `:3000`, but the Mac-side forwarded ports must not collide. Reusing a port that another live cmux ssh holds will trip `ExitOnForwardFailure=yes` and kill the new connection.
 - Freestyle snapshots are scoped to the building Freestyle account. A snapshot id from another account, including manaflow's, will not boot.
 - Fork is SDK / REST only. `freestyle vm fork` does not exist in the CLI. The helper wraps `vm.fork()` (`POST /v1/vms/{vm_id}/fork`).
 - The boot smoke checks already verify `cmuxd-remote`, `node`, `bun`, `codex`, `claude`, `opencode`, `pi`, `python3`, `openssl`; if your dev server fails to start, suspect your code, not the image.

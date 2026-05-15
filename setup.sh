@@ -111,7 +111,7 @@ Usage:
                                              #   list|doctor|--check|--target dir|
                                              #   --link|--copy)
   ./setup.sh vm <action>                     # boot/fork/open Freestyle VMs from cmux
-                                             #   (boot|fork|open|ssh|list|delete)
+                                             #   (boot|fork|open|dev|ssh|list|delete)
   ./setup.sh secrets <action>                # check|set|show|where|paths
 
 Credentials are resolved automatically from (in order):
