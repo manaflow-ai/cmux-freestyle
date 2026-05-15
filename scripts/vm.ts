@@ -69,7 +69,7 @@ function parseArgs(argv: string[]): Args {
     positional: [],
     localPort: 17430,
     vmPort: 3000,
-    devReadyTimeoutMs: 240_000,
+    devReadyTimeoutMs: 90_000,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
@@ -415,23 +415,47 @@ function cmuxReadScreen(workspaceRef: string, surfaceRef: string, lines = 6): st
   return result.stdout?.toString() ?? "";
 }
 
-// Heuristic: an interactive shell prompt that lands on its own line. Matches
-// `$ `, `# `, `% `, `> ` at the end (optionally with trailing whitespace) and
-// avoids matching cmux's own retry messages.
-const SHELL_PROMPT_REGEX = /(?:^|\n)[^\n]*[#$%>] *$/m;
+// Strip CSI/OSC ANSI escape sequences so a colorized prompt like
+// `\e[01;32mroot@host\e[00m:\e[01;34m~\e[00m# \e[<...>` reduces to a plain
+// `root@host:~# ` that we can match against.
+function stripAnsi(s: string): string {
+  // CSI: ESC [ ... letter
+  // OSC: ESC ] ... BEL or ESC \
+  return s
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[PX^_].*?\x1b\\/g, "")
+    .replace(/\x1b./g, "");
+}
+
+// True when the screen ends in an interactive shell prompt. Matches POSIX-y
+// prompts ending in `#`, `$`, `%`, or `>`, possibly followed by trailing
+// terminal-column padding. Looks at the last few non-empty lines instead of
+// requiring an exact tail anchor so the regex survives cursor sequences and
+// trailing whitespace from cmux's column padding.
+function looksLikePrompt(screen: string, hostHint?: string): boolean {
+  const cleaned = stripAnsi(screen).replace(/\r/g, "");
+  if (/reconnecting \(attempt/.test(cleaned)) return false;
+  const lines = cleaned.split("\n").map((l) => l.trimEnd()).filter((l) => l.length > 0);
+  const tail = lines.slice(-5);
+  for (const line of tail) {
+    if (hostHint && line.includes(hostHint) && /[#$%>]\s*$/.test(line)) return true;
+    if (/^[^\s][^\n]*[#$%>]\s*$/.test(line)) return true;
+  }
+  return false;
+}
 
 async function waitForPrompt(
   workspaceRef: string,
   surfaceRef: string,
   timeoutMs: number,
-  pollMs = 500
+  opts: { hostHint?: string; pollMs?: number } = {}
 ): Promise<boolean> {
+  const pollMs = opts.pollMs ?? 500;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const screen = cmuxReadScreen(workspaceRef, surfaceRef, 4).trimEnd();
-    if (screen && SHELL_PROMPT_REGEX.test(screen) && !/reconnecting \(attempt/.test(screen)) {
-      return true;
-    }
+    const screen = cmuxReadScreen(workspaceRef, surfaceRef, 8);
+    if (screen && looksLikePrompt(screen, opts.hostHint)) return true;
     await new Promise((r) => setTimeout(r, pollMs));
   }
   process.stderr.write(
@@ -491,11 +515,80 @@ function stampCodexAuth(
 //   top-right:    browser that auto-navigates to http://127.0.0.1:<localPort>
 //                 once the dev server on the VM's <vmPort> responds
 //
-// All of this is just `vm dev` with a baked-in --dev-cmd and a default snapshot
-// from $FREESTYLE_SANDBOX_SNAPSHOT, kept as its own subcommand so the SKILL has
-// a single, stable entrypoint for "start a new workspace".
+// Implementation choice: we deliberately avoid `cmux ssh` here. cmux ssh
+// against the Freestyle vm-ssh gateway is reliable for a single 2-pane
+// (terminal+browser) workspace, but its split semantics open a second
+// cmux-ssh-managed session whose startup races with the parent (`LocalForward
+// did not bind within 30s`, `[cmux] ssh exited with status 255; reconnecting`
+// loops, the parent's port forward gets torn down). Instead, this command
+// creates a regular local cmux workspace and runs raw `ssh` directly in each
+// terminal pane. All panes share a single Freestyle token; raw ssh is fast
+// (~1s to first prompt) and three concurrent sessions on one token are fine.
 const CMUX_CLONE_DEV_CMD =
   "git clone --depth 1 https://github.com/manaflow-ai/cmux && cd cmux && bun install && bun dev";
+
+function shQuote(s: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s)) return s;
+  return `'${s.replaceAll("'", "'\\''")}'`;
+}
+
+function buildSshCommand(
+  creds: { sshDestination: string; sshPort: number },
+  opts: { localPort?: number; vmPort?: number } = {}
+): string {
+  const args = [
+    "ssh",
+    "-p",
+    String(creds.sshPort),
+    "-F",
+    "/dev/null",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "LogLevel=ERROR",
+    "-o",
+    "ServerAliveInterval=30",
+  ];
+  if (opts.localPort != null && opts.vmPort != null) {
+    args.push("-L", `${opts.localPort}:localhost:${opts.vmPort}`, "-o", "ExitOnForwardFailure=yes");
+  }
+  args.push(creds.sshDestination);
+  return args.map(shQuote).join(" ");
+}
+
+function cmuxNewLocalWorkspace(name: string): {
+  workspaceRef: string;
+  terminalSurface: string;
+} {
+  // Important: do NOT pass `--command` here. `cmux new-workspace --command
+  // "ssh ..."` does not reliably exec the ssh inside the pane's zsh on a
+  // Freestyle workspace — the pane comes up with a local shell prompt and
+  // ssh never runs, so any text we then send (e.g. `codex\n`) is interpreted
+  // by the *local* zsh instead of by a remote shell on the VM. Creating an
+  // empty workspace and then sending the ssh command as keystrokes via
+  // `cmux send` mirrors what we do for the bottom panes and behaves the same
+  // way (local zsh runs `ssh ...`, ssh authenticates, terminal becomes a
+  // remote shell on the VM).
+  const result = spawnSync(
+    "cmux",
+    ["new-workspace", "--name", name, "--focus", "false"],
+    { stdio: ["ignore", "pipe", "inherit"] }
+  );
+  const raw = result.stdout?.toString() ?? "";
+  const wsMatch = raw.match(/(workspace:\d+)/);
+  if (!wsMatch) throw new Error(`could not parse workspace from new-workspace output: ${raw}`);
+  const workspaceRef = wsMatch[1]!;
+  const tree = cmuxTree(workspaceRef);
+  const surfaceMatch = tree.match(/surface (surface:\d+) \[terminal\]/);
+  if (!surfaceMatch) throw new Error(`no initial terminal surface in new workspace:\n${tree}`);
+  return { workspaceRef, terminalSurface: surfaceMatch[1]! };
+}
 
 async function cmdNew(args: Args): Promise<void> {
   let id = args.positional[1];
@@ -508,12 +601,136 @@ async function cmdNew(args: Args): Promise<void> {
       );
     }
     process.stderr.write(`using default snapshot from FREESTYLE_SANDBOX_SNAPSHOT=${id}\n`);
-    args.positional[1] = id;
   }
-  if (!args.devCmd) {
-    args.devCmd = CMUX_CLONE_DEV_CMD;
+
+  let vmId: string;
+  let snapshotId: string | undefined;
+  if (isSnapshotId(id)) {
+    snapshotId = id;
+    process.stderr.write(`booting from ${snapshotId}...\n`);
+    const created = await fs.vms.create({ snapshotId });
+    vmId = created.vmId;
+    process.stderr.write(`  vmId=${vmId}\n`);
+    process.stderr.write("waiting for running state...\n");
+    const state = await pollUntilRunning(vmId);
+    if (state !== "running") throw new Error(`VM ${vmId} did not reach running state (state=${state})`);
+  } else {
+    vmId = id;
+    process.stderr.write(`attaching to existing VM ${vmId}...\n`);
   }
-  await cmdDev(args);
+
+  // Stamp codex auth first so codex starts immediately when launched.
+  const openaiKey = args.skipCodex ? undefined : resolveOpenaiKey(args);
+  if (openaiKey) {
+    const stampCreds = await mintSshCreds(vmId);
+    stampCodexAuth(stampCreds, openaiKey);
+  } else if (!args.skipCodex) {
+    process.stderr.write(
+      "warning: OPENAI_API_KEY not found (env or --openai-env); codex will prompt for auth on first run\n"
+    );
+  }
+
+  // Single Freestyle token for all panes. Raw ssh handles concurrent sessions
+  // cleanly; per-pane creds aren't needed.
+  const creds = await mintSshCreds(vmId);
+  const tlSsh = buildSshCommand(creds, { localPort: args.localPort, vmPort: args.vmPort });
+  const plainSsh = buildSshCommand(creds);
+  const devCmd = args.devCmd ?? CMUX_CLONE_DEV_CMD;
+
+  const name = args.name ?? `codex-${shortId(vmId)}`;
+  process.stderr.write(`creating local cmux workspace ${name}...\n`);
+  const { workspaceRef, terminalSurface } = cmuxNewLocalWorkspace(name);
+  process.stderr.write(`  workspace=${workspaceRef}, top-left=${terminalSurface}\n`);
+
+  // Build the full 2x2 layout BEFORE running any ssh. cmux's pane splits and
+  // browser-pane addition resize sibling panes (SIGWINCH on their processes).
+  // The russh-based Freestyle SSH gateway closes interactive sessions when a
+  // window-change message arrives mid-handshake, leaving each ssh pane stuck
+  // in a half-dead state ("Connection to vm-ssh.freestyle.sh closed by remote
+  // host"). Constructing the entire layout while every pane is still an empty
+  // local zsh avoids all of that.
+  const browserUrl = `http://127.0.0.1:${args.localPort}/`;
+  process.stderr.write(`adding browser pane -> ${browserUrl}\n`);
+  addBrowserPane(workspaceRef, browserUrl);
+
+  const treeAfterBrowser = cmuxTree(workspaceRef);
+  const browserMatch = treeAfterBrowser.match(/surface (surface:\d+) \[browser\]/);
+  if (!browserMatch) throw new Error(`could not find browser surface:\n${treeAfterBrowser}`);
+  const browserSurface = browserMatch[1]!;
+  process.stderr.write(`top-right browser=${browserSurface}\n`);
+
+  process.stderr.write("splitting TL and TR downward (2x2)...\n");
+  const blSurface = cmuxSplitDown(workspaceRef, terminalSurface);
+  const brSurface = cmuxSplitDown(workspaceRef, browserSurface);
+  process.stderr.write(`bottom-left=${blSurface}, bottom-right=${brSurface}\n`);
+
+  // Layout is now stable. Send the ssh commands.
+  process.stderr.write(`top-left: ssh with LocalForward ${args.localPort} -> :${args.vmPort}\n`);
+  cmuxSendText(workspaceRef, terminalSurface, `${tlSsh}\n`);
+  cmuxSendText(workspaceRef, blSurface, `${plainSsh}\n`);
+  cmuxSendText(workspaceRef, brSurface, `${plainSsh}\n`);
+
+  process.stderr.write(`waiting for LocalForward on 127.0.0.1:${args.localPort} ...\n`);
+  const forwardUp = await waitForLocalListen(args.localPort, 30_000);
+  if (!forwardUp) {
+    process.stderr.write(
+      `warning: LocalForward did not bind within 30s; ssh may have failed (check top-left pane)\n`
+    );
+  } else {
+    process.stderr.write(`LocalForward bound.\n`);
+  }
+
+  // hostHint = vmId so waitForPrompt only matches a prompt from the *remote*
+  // VM (e.g. `root@<vmId>:~#`), not a local Mac zsh prompt.
+  const hostHint = vmId;
+
+  if (!args.skipDev) {
+    process.stderr.write("waiting for bottom-right remote ssh prompt...\n");
+    await waitForPrompt(workspaceRef, brSurface, 60_000, { hostHint });
+    process.stderr.write(`starting dev server in bottom-right: ${devCmd}\n`);
+    cmuxSendText(workspaceRef, brSurface, `${devCmd}\n`);
+    process.stderr.write(`waiting for ${browserUrl} ...\n`);
+    const ready = await waitForUrl(browserUrl, args.devReadyTimeoutMs);
+    if (ready) {
+      process.stderr.write(`dev server is up; reloading browser pane\n`);
+      cmuxBrowserReload(browserSurface);
+    } else {
+      process.stderr.write(
+        `dev server did not respond within ${args.devReadyTimeoutMs}ms; check bottom-right pane for errors\n`
+      );
+    }
+  }
+
+  if (!args.skipCodex) {
+    process.stderr.write("waiting for top-left remote ssh prompt...\n");
+    await waitForPrompt(workspaceRef, terminalSurface, 60_000, { hostHint });
+    process.stderr.write("launching codex in top-left\n");
+    cmuxSendText(workspaceRef, terminalSurface, "codex\n");
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        vmId,
+        snapshotId: snapshotId ?? null,
+        workspaceRef,
+        name,
+        localPort: args.localPort,
+        vmPort: args.vmPort,
+        browserUrl,
+        terminalSurface,
+        browserSurface,
+        bottomLeftSurface: blSurface,
+        bottomRightSurface: brSurface,
+        sshDestination: creds.sshDestination,
+        sshPort: creds.sshPort,
+        devCmd: args.skipDev ? null : devCmd,
+        codex: !args.skipCodex,
+      },
+      null,
+      2
+    )
+  );
 }
 
 async function cmdDev(args: Args): Promise<void> {
