@@ -14,10 +14,26 @@ cmux-freestyle gives you everything you need to spin a fresh Freestyle Cloud VM 
 
 The `./setup.sh vm` subcommand does all of this in one call.
 
-## Env contract
+## Credentials (always probe setup.sh first)
 
-- `FREESTYLE_API_KEY` is required. Either `export FREESTYLE_API_KEY=fk_...` or put it in `cmux-freestyle/.env` (the dispatcher auto-loads `.env`).
-- A Freestyle snapshot id (for `vm boot`). Build one with `./setup.sh snapshot` or use any existing snapshot id from `./setup.sh vm list`.
+Never ask the user for a Freestyle API key directly. setup.sh owns credential resolution and has its own search chain. Pre-flight every Freestyle action with:
+
+```bash
+./setup.sh secrets check
+```
+
+- Exit `0`: credentials are resolved. The dispatcher will pass them to every subcommand that needs them. Proceed.
+- Non-zero: no credentials anywhere. Tell the user once, then have them run `./setup.sh secrets set` (interactive, input hidden) or `./setup.sh secrets set --key <their-key> --dest ~/.config/cmux-freestyle/.env` (scripted). Re-run `./setup.sh secrets check` to confirm, then proceed.
+
+Other useful queries:
+
+- `./setup.sh secrets where` prints just the source file path that satisfied resolution.
+- `./setup.sh secrets show` prints the masked key and source.
+- `./setup.sh secrets paths` prints the full search list (useful when explaining to the user where setup.sh looked).
+
+The skill does not need to know the env var name or any specific dotfile. Treat `./setup.sh secrets *` as the only credential surface and never paste a key into chat or commit it.
+
+A Freestyle snapshot id is also needed for `vm boot`. Build one with `./setup.sh snapshot` or list existing ones with `./setup.sh vm list`.
 
 ## Subcommands
 
@@ -41,6 +57,7 @@ Flags:
 ## Workflow A: boot a fresh VM and start a dev session
 
 ```bash
+./setup.sh secrets check                              # pre-flight
 ./setup.sh vm boot sh-17agfasevrc18c8f15nn --local-port 17430
 ```
 
@@ -146,10 +163,10 @@ Freestyle VMs accrue cost. When you are done:
 
 ## Rules and gotchas
 
+- Always pre-flight with `./setup.sh secrets check`. Never prompt the user for a Freestyle API key in chat, never paste one yourself, never `export` one in commands you suggest. Hand off credential setup to `./setup.sh secrets set` and resume.
 - Always pass `--no-focus` to `cmux ssh` (the helper does this for you). The user may be visually focused on another workspace.
 - Pick a unique `--local-port` per concurrent workspace. The dev server inside each VM is on `:3000`, but the Mac-side forwarded ports must not collide.
 - Freestyle snapshots are scoped to the building Freestyle account. A snapshot id from another account, including manaflow's, will not boot.
 - Fork is SDK / REST only. `freestyle vm fork` does not exist in the CLI. The helper wraps `vm.fork()` (`POST /v1/vms/{vm_id}/fork`).
 - The boot smoke checks already verify `cmuxd-remote`, `node`, `bun`, `codex`, `claude`, `opencode`, `pi`, `python3`, `openssl`; if your dev server fails to start, suspect your code, not the image.
-- The dispatcher auto-loads `cmux-freestyle/.env`. Skip with `CMUX_FREESTYLE_SKIP_DOTENV=1`.
 - For port forwarding to fail loudly instead of silently, the helper passes `ExitOnForwardFailure=yes` to ssh. If the cmux pane disconnects right after `cmux ssh`, suspect a clashing `--local-port`.
