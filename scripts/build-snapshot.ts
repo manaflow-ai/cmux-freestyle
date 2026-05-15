@@ -288,13 +288,21 @@ async function fetchLatestStableTag(): Promise<string> {
     { headers },
   );
   if (response.status === 403 || response.status === 429) {
-    const reset = response.headers.get("x-ratelimit-reset");
-    const hint = token
-      ? "Your GITHUB_TOKEN does not have access; check repo visibility."
-      : "Set GITHUB_TOKEN (or GH_TOKEN) to lift the unauthenticated 60/hr GitHub API rate limit.";
-    throw new Error(
-      `GitHub API rate limited (HTTP ${response.status}${reset ? `, reset at ${new Date(Number(reset) * 1000).toISOString()}` : ""}). ${hint}`,
-    );
+    // The REST API is rate-limited; try the public web redirect. The HTML
+    // endpoint returns a 302 to /releases/tag/<tag> regardless of auth and
+    // is served separately from the REST quota.
+    try {
+      return await fetchLatestStableTagViaRedirect();
+    } catch (fallbackErr) {
+      const reset = response.headers.get("x-ratelimit-reset");
+      const hint = token
+        ? "Your GITHUB_TOKEN does not have access; check repo visibility."
+        : "Set GITHUB_TOKEN (or GH_TOKEN) or sign in with `gh auth login`.";
+      const fallbackHint = ` (web fallback also failed: ${(fallbackErr as Error).message})`;
+      throw new Error(
+        `GitHub API rate limited (HTTP ${response.status}${reset ? `, reset at ${new Date(Number(reset) * 1000).toISOString()}` : ""}).${fallbackHint} ${hint}`,
+      );
+    }
   }
   if (!response.ok) {
     const body = await response.text();
@@ -308,6 +316,28 @@ async function fetchLatestStableTag(): Promise<string> {
     throw new Error("GitHub releases/latest did not include a tag_name");
   }
   return tag;
+}
+
+// Resolves the latest release tag through the public web redirect.
+// `https://github.com/<owner>/<repo>/releases/latest` returns a 302 to
+// `/releases/tag/<tag>`, served by github.com (not api.github.com) and
+// outside the REST rate limit. Useful as a fallback when the API is
+// rate-limited or the user has no GitHub token.
+async function fetchLatestStableTagViaRedirect(): Promise<string> {
+  const url = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+  const response = await fetch(url, {
+    redirect: "manual",
+    headers: { "User-Agent": "cmux-freestyle-setup" },
+  });
+  if (response.status < 300 || response.status >= 400) {
+    throw new Error(`releases/latest did not redirect (HTTP ${response.status})`);
+  }
+  const loc = response.headers.get("location") ?? "";
+  const match = loc.match(/\/releases\/tag\/([^/?#]+)/);
+  if (!match?.[1]) {
+    throw new Error(`releases/latest redirect had no tag (Location: ${loc})`);
+  }
+  return decodeURIComponent(match[1]);
 }
 
 function githubToken(): string | null {

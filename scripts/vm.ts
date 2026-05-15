@@ -91,7 +91,7 @@ async function pollUntilRunning(vmId: string, attempts = 20, intervalMs = 1500):
     const state = found?.state ?? "unknown";
     if (state === "running") return state;
     process.stderr.write(`  [${i + 1}/${attempts}] state=${state}\n`);
-    if (state === "lost" || state === "deleted") return state;
+    if (state === "lost" || state === "stopped") return state;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return "timeout";
@@ -166,7 +166,7 @@ async function cmdBoot(args: Args): Promise<void> {
   const snapshotId = args.positional[1];
   if (!snapshotId) throw new Error("usage: vm boot <snapshotId>");
   process.stderr.write(`booting from ${snapshotId}...\n`);
-  const created = await fs.vms.create({ snapshot: { snapshotId } });
+  const created = await fs.vms.create({ snapshotId });
   const vmId = created.vmId;
   process.stderr.write(`  vmId=${vmId}\n`);
   process.stderr.write("waiting for running state...\n");

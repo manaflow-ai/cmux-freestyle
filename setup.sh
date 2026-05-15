@@ -77,6 +77,58 @@ print_search_paths() {
 # result. Subcommands that need credentials enforce below.
 load_secrets || true
 
+# GitHub token resolution: env first, then gh CLI auth fallback so users with
+# `gh auth login` get the 5000/hr authenticated GitHub API rate limit for
+# free during snapshot builds (no GITHUB_TOKEN in env, no .env edits needed).
+CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE=""
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE="env(GITHUB_TOKEN)"
+elif [ -n "${GH_TOKEN:-}" ]; then
+  export GITHUB_TOKEN="$GH_TOKEN"
+  CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE="env(GH_TOKEN)"
+elif command -v gh >/dev/null 2>&1; then
+  if _gh_tok="$(gh auth token 2>/dev/null)" && [ -n "$_gh_tok" ]; then
+    export GITHUB_TOKEN="$_gh_tok"
+    CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE="gh-cli"
+  fi
+  unset _gh_tok
+fi
+
+if [ $# -gt 0 ]; then
+  case "$1" in
+    -h|--help|help)
+      cat <<'USAGE'
+cmux-freestyle: build Freestyle VM snapshots and drive them from cmux.
+
+Usage:
+  ./setup.sh                                 # default: snapshot
+  ./setup.sh snapshot [flags]                # build a Freestyle VM snapshot
+  ./setup.sh doctor                          # diagnose tools, env, API reachability
+  ./setup.sh web --snapshot sh-... [flags]   # clone manaflow-ai/cmux + wire dev env
+  ./setup.sh home [--ref main]               # install + run cmux-home Ink TUI
+  ./setup.sh skills <action>                 # install the cmux-freestyle agent skill
+                                             #   into a project (install|uninstall|
+                                             #   list|doctor|--check|--target dir|
+                                             #   --link|--copy)
+  ./setup.sh vm <action>                     # boot/fork/open Freestyle VMs from cmux
+                                             #   (boot|fork|open|ssh|list|delete)
+  ./setup.sh secrets <action>                # check|set|show|where|paths
+
+Credentials are resolved automatically from (in order):
+  1. the running env
+  2. ./.env in this checkout
+  3. ~/.config/cmux-freestyle/.env
+  4. ~/.secrets/cmux-freestyle.env
+  5. ~/.secrets/cmux.env
+GITHUB_TOKEN additionally falls back to `gh auth token` when authenticated.
+
+See README.md for per-subcommand flags. Each subcommand also accepts --help.
+USAGE
+      exit 0
+      ;;
+  esac
+fi
+
 PEEK_SUB="snapshot"
 if [ $# -gt 0 ]; then
   case "$1" in
@@ -173,6 +225,12 @@ case "$SUBCOMMAND" in
       check)
         if [ -n "${FREESTYLE_API_KEY:-}" ]; then
           printf 'freestyle credentials: ok\n  source: %s\n' "$CMUX_FREESTYLE_SECRET_SOURCE"
+          if [ -n "${GITHUB_TOKEN:-}" ]; then
+            printf 'github token:         ok\n  source: %s\n' "${CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE:-env}"
+          else
+            printf 'github token:         missing (will hit 60/hr unauth limit during snapshot builds)\n'
+            printf '  fix:                run `gh auth login` or `export GITHUB_TOKEN=ghp_...`\n'
+          fi
           exit 0
         fi
         echo "freestyle credentials: MISSING" >&2
@@ -227,10 +285,18 @@ USAGE
         ;;
       show)
         if [ -n "${FREESTYLE_API_KEY:-}" ]; then
-          printf 'source: %s\nkey:    %s (len=%d)\n' \
+          printf 'freestyle:\n  source: %s\n  key:    %s (len=%d)\n' \
             "$CMUX_FREESTYLE_SECRET_SOURCE" \
             "$(mask_key "$FREESTYLE_API_KEY")" \
             "${#FREESTYLE_API_KEY}"
+          if [ -n "${GITHUB_TOKEN:-}" ]; then
+            printf 'github:\n  source: %s\n  key:    %s (len=%d)\n' \
+              "${CMUX_FREESTYLE_GITHUB_TOKEN_SOURCE:-env}" \
+              "$(mask_key "$GITHUB_TOKEN")" \
+              "${#GITHUB_TOKEN}"
+          else
+            printf 'github:\n  source: -\n  key:    (none)\n'
+          fi
           exit 0
         fi
         echo "no key found" >&2
