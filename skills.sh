@@ -227,7 +227,7 @@ case "$SUB" in
     fi
     TARGET="$(cd "$TARGET" && pwd)"
     if [ "$TARGET" = "$SCRIPT_DIR" ] && [ "$MODE" = "link" ]; then
-      echo "[skills.sh] target == this checkout; skipping (nothing to install into itself)" >&2
+      echo "[skills.sh] target == this checkout; skills are already wired in via tracked .claude/skills/ and .agents/skills/ symlinks. Pass --target <other-project> to install elsewhere." >&2
       exit 0
     fi
     while IFS= read -r name; do
