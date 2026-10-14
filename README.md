@@ -47,7 +47,7 @@ The snapshot is built from a Dockerfile that mirrors `repo/web/scripts/build-clo
 - `cmuxd-remote` Linux/amd64 binary downloaded from the pinned `manaflow-ai/cmux` GitHub release, SHA-256 verified during the image build.
 - `/usr/local/bin/cmux` symlinked to `cmuxd-remote` for the in-VM relay CLI.
 - Node.js (default major `22`) from NodeSource, Bun pinned to a known good tag.
-- Coding agents pinned to the same versions cmux ships: `@anthropic-ai/claude-code`, `opencode-ai`, `@openai/codex`, `@earendil-works/pi-coding-agent`.
+- Coding agents pinned to the same versions cmux ships: `@anthropic-ai/claude-code`, `@opencode/cli` (opencode v2), `@openai/codex`, `@earendil-works/pi-coding-agent`, plus `muse` (latest, via the official installer) and `omp` (pinned `v18.10.3`, via the official installer).
 - Linux user `cmux` with passwordless sudo.
 - Systemd unit `cmuxd-ws.service` running `cmuxd-remote serve --ws --listen 0.0.0.0:7777` with lease-file authentication, exposed on Freestyle port `443 -> 7777`.
 
@@ -67,10 +67,12 @@ Set these as flags on `./setup.sh` or as env vars:
 | `--codex-spec <npm-spec>` | `CMUX_CLOUD_IMAGE_CODEX_NPM_SPEC` | matches cmux pin | Use `none` to skip Codex. |
 | `--opencode-spec <npm-spec>` | `CMUX_CLOUD_IMAGE_OPENCODE_NPM_SPEC` | matches cmux pin | Use `none` to skip OpenCode. |
 | `--pi-spec <npm-spec>` | `CMUX_CLOUD_IMAGE_PI_NPM_SPEC` | matches cmux pin | Use `none` to skip Pi. |
+| `--muse-version <latest>` | `CMUX_CLOUD_IMAGE_MUSE_VERSION` | `latest` | Muse Code CLI, installed via its official script (`https://dev.meta.ai/install.sh`). Use `none` to skip Muse. |
+| `--omp-version <v18.10.3>` | `CMUX_CLOUD_IMAGE_OMP_VERSION` | `v18.10.3` | omp CLI (oh-my-pi), installed via its official script (`https://omp.sh/install --binary --ref <version>`). Use `none` to skip omp. |
 | `--skip-cache` | `CMUX_FREESTYLE_SKIP_CACHE=1` | off | Forces a full Freestyle rebuild. |
 | `--json` | `CMUX_FREESTYLE_JSON=1` | off | Machine-readable JSON output. |
 
-Agent CLI specs must be exact semver pins (for example `@openai/codex@0.130.0`), matching cmux's policy. Ranges and `latest` are rejected so each rebuild is reproducible.
+Agent CLI specs must be exact semver pins (for example `@openai/codex@0.130.0`), matching cmux's policy. Ranges and `latest` are rejected so each rebuild is reproducible. Muse Code CLI is the exception: it is installed via its official install script (`https://dev.meta.ai/install.sh`) rather than npm, and the installer resolves the current stable channel release (no pinning support), so `--muse-version` accepts only `latest`; any other value fails the build. omp is also installed via its official install script (`https://omp.sh/install`) and accepts an exact `x.y.z`/`vX.Y.Z` pin (normalized to a v-prefix).
 
 ## Using the snapshot
 
